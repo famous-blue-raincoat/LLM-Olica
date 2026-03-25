@@ -33,6 +33,7 @@ which takes approximately 7 minutes on a single NVIDIA GeForce RTX 4090 GPU.
 Arguments:
 
 - ``--base_model``: The size of LLaMA model.
+  - Also supports a full Hugging Face model path, for example: `meta-llama/Meta-Llama-3.1-8B`.
 - ``--datasets``: Calibration datasets for sampling.
 - ``--num_samples``: Specify the number of calibration samples drawn from each dataset.
 - ``--seqlen``: Sequence length of each calibration sample.
@@ -54,6 +55,22 @@ CUDA_VISIBLE_DEVICES=0 python model_evaluate.py \
 ```
 
 Optionally, you can run `bash scripts/pruning_and_eval_7b.sh` and `bash scripts/pruning_and_eval_13b.sh`.
+
+### Llama 3.1-8B Example
+
+```sh
+CUDA_VISIBLE_DEVICES=0 python model_pruning.py \
+--base_model meta-llama/Meta-Llama-3.1-8B \
+--datasets bookcorpus+alpaca \
+--num_samples 128 \
+--seqlen 128 \
+--percdamp 0.5 \
+--mlp_num 6 \
+--sparsity 0.2 \
+--ratio 0.03 \
+--k 3 \
+--save_dir ./pruned_models
+```
 
 ## Acknowledgments
 
