@@ -3,8 +3,27 @@ import torch.nn as nn
 from tqdm import tqdm
 import torch.nn.functional as F
 from typing import Union
-from datasets import load_from_disk
+from datasets import load_dataset, load_from_disk
 from lm_eval import models
+import os
+
+
+def _load_hf_dataset(
+    *,
+    dataset_name: str,
+    split: str,
+    local_candidates: list[str],
+):
+    """Load a dataset from local disk when available, otherwise from Hugging Face Hub."""
+    for dataset_path in local_candidates:
+        if dataset_path and os.path.exists(dataset_path):
+            try:
+                return load_from_disk(dataset_path)
+            except (FileNotFoundError, ValueError):
+                # Path exists but is not a valid `save_to_disk` dataset directory.
+                continue
+
+    return load_dataset(dataset_name, split=split)
 
 
 class SVDLinearForWidth(nn.Module):
@@ -37,10 +56,14 @@ def get_model(args):
 
 
 def get_bookcorpus(nsamples, seed, seqlen, tokenizer):
-
-    from datasets import load_dataset, load_from_disk
-    traindata = load_from_disk(
-        '/root/datasets/bookcorpus/train'
+    traindata = _load_hf_dataset(
+        dataset_name='bookcorpus',
+        split='train',
+        local_candidates=[
+            '/root/datasets/bookcorpus/train',
+            '/root/datasets/bookcorpus',
+            os.path.expanduser('~/.cache/huggingface/hub/datasets--bookcorpus'),
+        ],
     )
     tokenized_samples, history = [], []
     import random
@@ -109,7 +132,11 @@ class Prompter(object):
 
 def get_alpaca(nsamples, seed, seqlen, tokenizer):
     prompter = Prompter('alpaca')
-    dataset = load_from_disk('/root/datasets/alpaca/train')
+    dataset = _load_hf_dataset(
+        dataset_name='tatsu-lab/alpaca',
+        split='train',
+        local_candidates=['/root/datasets/alpaca/train', '/root/datasets/alpaca'],
+    )
     def tokenize(prompt, add_eos_token=True):
         result = tokenizer(
             prompt, return_tensors='pt',
@@ -145,9 +172,11 @@ def get_alpaca(nsamples, seed, seqlen, tokenizer):
 
 def get_c4(nsamples, seed, seqlen, tokenizer):
 
-
-    from datasets import load_dataset, load_from_disk
-    traindata = load_from_disk('/root/allenai/c4/train')
+    traindata = _load_hf_dataset(
+        dataset_name='allenai/c4',
+        split='train',
+        local_candidates=['/root/allenai/c4/train', '/root/allenai/c4'],
+    )
     # valdata = load_from_disk('allenai/c4/test')
 
     import random
