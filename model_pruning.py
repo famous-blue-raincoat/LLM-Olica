@@ -8,7 +8,7 @@ import os
 import copy
 import pickle
 from transformers import LlamaForCausalLM as LlamaForCausalLMPretrained
-from transformers import LlamaTokenizer
+from transformers import AutoTokenizer
 from utils.utils import get_bookcorpus, get_alpaca, get_config
 from utils.llama_utils import fast_OND, pruning
 
@@ -58,7 +58,7 @@ def main(args):
     model_name = args.base_model.split('/')[-1]
     print('load model...')
     model = LlamaForCausalLMPretrained.from_pretrained(args.base_model, torch_dtype='auto', device_map='cpu')
-    tokenizer = LlamaTokenizer.from_pretrained(args.base_model)
+    tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=False)
     model.eval()
 
     state_dict = model.state_dict()
@@ -129,6 +129,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(args)
     set_seed(args.seed)
-    model_name = 'Llama-{}'.format(args.base_model)
-    args.base_model = '/userhome/home/hejiujun/ckpts/Llama-{}'.format(args.base_model)
+    if "/" in args.base_model:
+        args.base_model = args.base_model.rstrip("/")
+    else:
+        args.base_model = '/userhome/home/hejiujun/ckpts/Llama-{}'.format(args.base_model)
     main(args)
