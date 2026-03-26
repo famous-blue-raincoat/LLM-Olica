@@ -1,5 +1,6 @@
 import time
 import torch
+import torch.nn as nn
 import argparse
 from torch.amp import autocast
 from transformers import set_seed
@@ -11,6 +12,49 @@ from transformers import LlamaForCausalLM as LlamaForCausalLMPretrained
 from transformers import AutoTokenizer
 from utils.utils import get_bookcorpus, get_alpaca, get_config
 from utils.llama_utils import fast_OND, pruning
+
+
+def convert_gqa_to_mha(model):
+    """
+    Expand grouped-query attention (GQA) key/value projections to standard MHA layout.
+    This keeps forward behavior equivalent to repeat_kv while making per-head width logic
+    in pruning code compatible with models such as Llama 3/3.1.
+    """
+    n_heads = model.config.num_attention_heads
+    n_kv_heads = getattr(model.config, "num_key_value_heads", n_heads)
+    if n_heads == n_kv_heads:
+        return model
+
+    if n_heads % n_kv_heads != 0:
+        raise ValueError(
+            f"num_attention_heads ({n_heads}) is not divisible by num_key_value_heads ({n_kv_heads})."
+        )
+
+    hidden_size = model.config.hidden_size
+    head_dim = hidden_size // n_heads
+    kv_groups = n_heads // n_kv_heads
+
+    for layer in model.model.layers:
+        attn = layer.self_attn
+        for proj_name in ("k_proj", "v_proj"):
+            proj = getattr(attn, proj_name)
+            weight = proj.weight.data
+            # [n_kv_heads * head_dim, hidden_size] -> [n_heads * head_dim, hidden_size]
+            expanded_weight = (
+                weight.view(n_kv_heads, head_dim, hidden_size)
+                .repeat_interleave(kv_groups, dim=0)
+                .reshape(n_heads * head_dim, hidden_size)
+            )
+
+            new_proj = nn.Linear(hidden_size, n_heads * head_dim, bias=False)
+            new_proj.weight = torch.nn.Parameter(expanded_weight.to(weight.dtype))
+            setattr(attn, proj_name, new_proj)
+
+        attn.num_key_value_heads = n_heads
+        attn.num_key_value_groups = 1
+
+    model.config.num_key_value_heads = n_heads
+    return model
 
 
 @autocast(device_type='cuda')
@@ -65,6 +109,7 @@ def main(args):
     model_name = args.base_model.split('/')[-1]
     print('load model...')
     model = LlamaForCausalLMPretrained.from_pretrained(args.base_model, torch_dtype='auto', device_map='cpu')
+    model = convert_gqa_to_mha(model)
     tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=False)
     model.eval()
 
