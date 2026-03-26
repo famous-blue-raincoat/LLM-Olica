@@ -11,18 +11,43 @@ from utils.utils import find_layers, WrappedGPT, solve, SVDLinearForWidth
 import numpy as np
 
 
+def _resolve_position_embeddings(layer, hidden_states, position_ids, dev):
+    rotary_modules = []
+    if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "rotary_emb"):
+        rotary_modules.append(layer.self_attn.rotary_emb)
+    if hasattr(layer, "rotary_emb"):
+        rotary_modules.append(layer.rotary_emb)
+
+    position_ids = position_ids.to(dev)
+    hidden_states = hidden_states.to(dev)
+    for rotary_emb in rotary_modules:
+        if rotary_emb is None:
+            continue
+        try:
+            return rotary_emb(hidden_states, position_ids)
+        except TypeError:
+            try:
+                return rotary_emb(hidden_states, seq_len=hidden_states.shape[1])
+            except TypeError:
+                continue
+    return None
+
+
 def _build_layer_kwargs(layer, hidden_states, attention_mask, position_ids, dev):
     layer_kwargs = {"position_ids": position_ids.to(dev)}
     if attention_mask is not None:
         layer_kwargs["attention_mask"] = attention_mask.to(dev)
 
     if "position_embeddings" in inspect.signature(layer.forward).parameters:
-        rotary_emb = getattr(layer.self_attn, "rotary_emb", None)
-        if rotary_emb is not None:
-            try:
-                layer_kwargs["position_embeddings"] = rotary_emb(hidden_states, position_ids.to(dev))
-            except TypeError:
-                layer_kwargs["position_embeddings"] = rotary_emb(hidden_states, seq_len=hidden_states.shape[1])
+        position_embeddings_param = inspect.signature(layer.forward).parameters["position_embeddings"]
+        position_embeddings = _resolve_position_embeddings(layer, hidden_states, position_ids, dev)
+        if position_embeddings is not None:
+            layer_kwargs["position_embeddings"] = position_embeddings
+        elif position_embeddings_param.default is inspect._empty:
+            raise RuntimeError(
+                "Unable to construct `position_embeddings` for decoder layer forward pass. "
+                "Please check the installed transformers version and rotary embedding API."
+            )
 
     return layer_kwargs
 
