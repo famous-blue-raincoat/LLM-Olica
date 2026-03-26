@@ -106,8 +106,12 @@ def fast_OND(model, init_inputs, dtype, config, args):
             handles.append(subset[name].register_forward_hook(add_batch(name)))
         for j in range(len(layer_inputs)):
             with torch.no_grad():
-                layer_inputs[j] = \
-                    layer(layer_inputs[j].unsqueeze(0).to(dev), attention_mask=attention_mask.to(dev), position_ids=position_ids.to(dev))[0].to(layer_inputs).cpu()
+                layer_kwargs = {"position_ids": position_ids.to(dev)}
+                if attention_mask is not None:
+                    layer_kwargs["attention_mask"] = attention_mask.to(dev)
+                layer_inputs[j] = layer(
+                    layer_inputs[j].unsqueeze(0).to(dev), **layer_kwargs
+                )[0].to(layer_inputs).cpu()
 
         for h in handles + [h1, h2, h3, h4]:
             h.remove()
@@ -231,7 +235,10 @@ def pruning(model, init_inputs, config, mlp_index, args):
 
         for j in range(len(layer_inputs)):
             with torch.no_grad():
-                layer(layer_inputs[j].unsqueeze(0).to(dev), attention_mask=attention_mask.to(dev), position_ids=position_ids.to(dev))[0].to(layer_inputs).cpu()
+                layer_kwargs = {"position_ids": position_ids.to(dev)}
+                if attention_mask is not None:
+                    layer_kwargs["attention_mask"] = attention_mask.to(dev)
+                layer(layer_inputs[j].unsqueeze(0).to(dev), **layer_kwargs)[0].to(layer_inputs).cpu()
 
         for h in handles:
             h.remove()

@@ -32,7 +32,14 @@ def olica_pruning(model, dataloader, args):
             pass
 
     attention_mask = torch.ones((1, args.seqlen), dtype=torch.bool, device=layer_inputs.device)
-    attention_mask_importance = model.model._prepare_decoder_attention_mask(attention_mask, (1, args.seqlen), layer_inputs, 0)
+    if hasattr(model.model, "_prepare_decoder_attention_mask"):
+        attention_mask_importance = model.model._prepare_decoder_attention_mask(
+            attention_mask, (1, args.seqlen), layer_inputs, 0
+        )
+    else:
+        # Newer versions of Transformers no longer expose this private helper.
+        # Passing `None` lets each decoder layer build its own causal mask.
+        attention_mask_importance = None
     layer_inputs_importance = layer_inputs
     position_ids_importance = torch.arange(args.seqlen, dtype=torch.long, device='cpu').unsqueeze(0)
 
