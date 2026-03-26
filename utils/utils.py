@@ -4,7 +4,7 @@ from tqdm import tqdm
 import torch.nn.functional as F
 from typing import Union
 from datasets import load_dataset, load_from_disk
-from lm_eval import models
+# from lm_eval import models
 import os
 
 
