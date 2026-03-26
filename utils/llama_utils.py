@@ -1,5 +1,6 @@
 from tqdm import tqdm
 import math
+import inspect
 import torch
 from torch.nn.parameter import Parameter
 from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
@@ -8,6 +9,22 @@ from typing import Optional, Tuple
 import torch.nn as nn
 from utils.utils import find_layers, WrappedGPT, solve, SVDLinearForWidth
 import numpy as np
+
+
+def _build_layer_kwargs(layer, hidden_states, attention_mask, position_ids, dev):
+    layer_kwargs = {"position_ids": position_ids.to(dev)}
+    if attention_mask is not None:
+        layer_kwargs["attention_mask"] = attention_mask.to(dev)
+
+    if "position_embeddings" in inspect.signature(layer.forward).parameters:
+        rotary_emb = getattr(layer.self_attn, "rotary_emb", None)
+        if rotary_emb is not None:
+            try:
+                layer_kwargs["position_embeddings"] = rotary_emb(hidden_states, position_ids.to(dev))
+            except TypeError:
+                layer_kwargs["position_embeddings"] = rotary_emb(hidden_states, seq_len=hidden_states.shape[1])
+
+    return layer_kwargs
 
 
 @autocast(device_type='cuda')
@@ -106,11 +123,10 @@ def fast_OND(model, init_inputs, dtype, config, args):
             handles.append(subset[name].register_forward_hook(add_batch(name)))
         for j in range(len(layer_inputs)):
             with torch.no_grad():
-                layer_kwargs = {"position_ids": position_ids.to(dev)}
-                if attention_mask is not None:
-                    layer_kwargs["attention_mask"] = attention_mask.to(dev)
+                hidden_states = layer_inputs[j].unsqueeze(0).to(dev)
+                layer_kwargs = _build_layer_kwargs(layer, hidden_states, attention_mask, position_ids, dev)
                 layer_inputs[j] = layer(
-                    layer_inputs[j].unsqueeze(0).to(dev), **layer_kwargs
+                    hidden_states, **layer_kwargs
                 )[0].to(layer_inputs).cpu()
 
         for h in handles + [h1, h2, h3, h4]:
@@ -235,10 +251,9 @@ def pruning(model, init_inputs, config, mlp_index, args):
 
         for j in range(len(layer_inputs)):
             with torch.no_grad():
-                layer_kwargs = {"position_ids": position_ids.to(dev)}
-                if attention_mask is not None:
-                    layer_kwargs["attention_mask"] = attention_mask.to(dev)
-                layer(layer_inputs[j].unsqueeze(0).to(dev), **layer_kwargs)[0].to(layer_inputs).cpu()
+                hidden_states = layer_inputs[j].unsqueeze(0).to(dev)
+                layer_kwargs = _build_layer_kwargs(layer, hidden_states, attention_mask, position_ids, dev)
+                layer(hidden_states, **layer_kwargs)[0].to(layer_inputs).cpu()
 
         for h in handles:
             h.remove()
@@ -330,10 +345,9 @@ def pruning(model, init_inputs, config, mlp_index, args):
 
         for j in range(len(layer_inputs)):
             with torch.no_grad():
-                layer_inputs[j] = \
-                    layer(layer_inputs[j].unsqueeze(0).to(dev), attention_mask=attention_mask.to(dev),
-                          position_ids=position_ids.to(dev))[
-                        0].to(layer_inputs).cpu()
+                hidden_states = layer_inputs[j].unsqueeze(0).to(dev)
+                layer_kwargs = _build_layer_kwargs(layer, hidden_states, attention_mask, position_ids, dev)
+                layer_inputs[j] = layer(hidden_states, **layer_kwargs)[0].to(layer_inputs).cpu()
 
         layers[layer_index] = layer.cpu()
         del layer, mlp_inps, mlp_oups
@@ -355,6 +369,9 @@ def forward(
     past_key_value: Optional[Tuple[torch.Tensor]] = None,
     output_attentions: bool = False,
     use_cache: bool = False,
+    cache_position: Optional[torch.LongTensor] = None,
+    position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    **kwargs,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     bsz, q_len, _ = hidden_states.size()
 
@@ -369,7 +386,10 @@ def forward(
     kv_seq_len = key_states.shape[-2]
     if past_key_value is not None:
         kv_seq_len += past_key_value[0].shape[-2]
-    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+    if position_embeddings is None:
+        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+    else:
+        cos, sin = position_embeddings
     query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
     if past_key_value is not None:
